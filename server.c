@@ -10,16 +10,11 @@
 
 
 int main(int argc, char *argv[]){
-  if (argc < 3) {
-    printf("Too few arguments!\nExpected: <server-ip>:<server:port> <nickname>\n");
-    return 1;
+  if (argc != 2)
+  {
+    printf("Expected: <ip>:<port>\n");
   }
-
-  if (argc > 3) {
-    printf("Too many arguments!\nExpected: <server-ip>:<server:port> <nickname>\n");
-    return 1;
-  }
-
+  
   char delim[] = ":";
   char *Desthost = strtok(argv[1], delim);
   char *Destport = strtok(NULL, delim);
