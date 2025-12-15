@@ -1,17 +1,18 @@
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netdb.h>
+#include <regex.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <errno.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/select.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 #include <termios.h>
-#include <regex.h>
+#include <unistd.h>
 
 #define MAX_NICK 12
 #define READBUF 4096
+#define MAX_MSG 255
 
 static struct termios orig_term;
 static int sockfd = -1;
@@ -21,11 +22,23 @@ static void restore_terminal(void) {
   tcsetattr(STDIN_FILENO, TCSANOW, &orig_term);
 }
 
+static void setup_terminal(void) {
+  tcgetattr(STDIN_FILENO, &orig_term);
+  atexit(restore_terminal);
+
+  struct termios t = orig_term;
+  t.c_lflag &= ~(ECHO | ICANON);
+  t.c_cc[VMIN] = 1;
+  t.c_cc[VTIME] = 0;
+  tcsetattr(STDIN_FILENO, TCSANOW, &t);
+}
+
 static void die(const char *msg) {
   perror(msg);
   fflush(stderr);
   restore_terminal();
-  if (sockfd >= 0) close(sockfd);
+  if (sockfd >= 0)
+    close(sockfd);
   exit(EXIT_FAILURE);
 }
 
@@ -41,7 +54,7 @@ static int validate_nick(const char *nick) {
 
 static int connect_to_server(const char *host, const char *port) {
   struct addrinfo hints = {0}, *res, *rp;
-  hints.ai_family   = AF_UNSPEC;
+  hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
 
   if (getaddrinfo(host, port, &hints, &res) != 0)
@@ -50,8 +63,10 @@ static int connect_to_server(const char *host, const char *port) {
   int s = -1;
   for (rp = res; rp; rp = rp->ai_next) {
     s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-    if (s == -1) continue;
-    if (connect(s, rp->ai_addr, rp->ai_addrlen) == 0) break;
+    if (s == -1)
+      continue;
+    if (connect(s, rp->ai_addr, rp->ai_addrlen) == 0)
+      break;
     close(s);
     s = -1;
   }
@@ -59,16 +74,16 @@ static int connect_to_server(const char *host, const char *port) {
   return s;
 }
 
-int main(int argc, char *argv[]){
-  
- if (argc == 2)
-  {
-    fprintf(stderr, "Too few arguments!\nExpected: <server-ip>:<server-port> <nickname>\n");
+int main(int argc, char *argv[]) {
+
+  if (argc == 2) {
+    fprintf(
+        stderr,
+        "Too few arguments!\nExpected: <server-ip>:<server-port> <nickname>\n");
     fflush(stderr);
     return EXIT_FAILURE;
   }
-    
-    
+
   if (argc != 3) {
     fprintf(stderr, "Usage: %s host:port nick\n", argv[0]);
     fflush(stderr);
@@ -90,18 +105,18 @@ int main(int argc, char *argv[]){
   strncpy(mynick, argv[2], sizeof(mynick) - 1);
 
   sockfd = connect_to_server(host, port);
-  if (sockfd < 0) die("connect");
+  if (sockfd < 0)
+    die("connect");
 
-  /* ---- client prints ---- */
   printf("Connected to %s:%s\n", host, port);
   fflush(stdout);
 
   free(hp);
 
-  /* ---- read HELLO ---- */
   char buf[READBUF];
   ssize_t n = read(sockfd, buf, sizeof(buf) - 1);
-  if (n <= 0) die("read");
+  if (n <= 0)
+    die("read");
   buf[n] = '\0';
 
   printf("Server protocol: %s", buf);
@@ -116,16 +131,76 @@ int main(int argc, char *argv[]){
     die("write");
 
   n = read(sockfd, buf, sizeof(buf) - 1);
-  if (n <= 0) die("read");
+  if (n <= 0)
+    die("read");
   buf[n] = '\0';
 
   if (strncmp(buf, "OK", 2) != 0) {
-      fprintf(stderr, "%s", buf);
-      fflush(stderr);
-      return EXIT_FAILURE;
+    fprintf(stderr, "%s", buf);
+    fflush(stderr);
+    return EXIT_FAILURE;
   }
 
   printf("Name accepted!\n");
   fflush(stdout);
 
+  setup_terminal();
+
+  /* ---- buffers ---- */
+  char sockbuf[READBUF];
+  size_t socklen = 0;
+
+  char input[MAX_MSG + 1];
+  size_t inpos = 0;
+
+  fflush(stdout);
+
+  while (1) {
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(sockfd, &fds);
+    FD_SET(STDIN_FILENO, &fds);
+
+    if (select(sockfd + 1, &fds, NULL, NULL, NULL) < 0)
+      die("select");
+
+    /* ---- socket ---- */
+    if (FD_ISSET(sockfd, &fds)) {
+      ssize_t r =
+          read(sockfd, sockbuf + socklen, sizeof(sockbuf) - socklen - 1);
+      if (r <= 0)
+        break;
+
+      socklen += r;
+      sockbuf[socklen] = '\0';
+
+      char *start = sockbuf;
+      char *end = sockbuf + socklen;
+
+      while (1) {
+        char *nl = strchr(start, '\n');
+        if (!nl)
+          break;
+        *nl = '\0';
+
+        if (strncmp(start, "MSG ", 4) == 0) {
+          char *p = start + 4;
+          char *sp = strchr(p, ' ');
+          if (sp) {
+            *sp = '\0';
+            if (strcmp(p, mynick) != 0)
+              printf("%s: %s\n", p, sp + 1);
+          }
+        }
+
+        start = nl + 1;
+      }
+
+      memmove(sockbuf, start, end - start);
+      socklen = end - start;
+
+      printf("%.*s", (int)inpos, input);
+      fflush(stdout);
+    }
+  }
 }
