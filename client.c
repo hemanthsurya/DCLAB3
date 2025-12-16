@@ -146,7 +146,6 @@ int main(int argc, char *argv[]) {
 
   setup_terminal();
 
-  /* ---- buffers ---- */
   char sockbuf[READBUF];
   size_t socklen = 0;
 
@@ -164,7 +163,6 @@ int main(int argc, char *argv[]) {
     if (select(sockfd + 1, &fds, NULL, NULL, NULL) < 0)
       die("select");
 
-    /* ---- socket ---- */
     if (FD_ISSET(sockfd, &fds)) {
       ssize_t r =
           read(sockfd, sockbuf + socklen, sizeof(sockbuf) - socklen - 1);
@@ -202,5 +200,35 @@ int main(int argc, char *argv[]) {
       printf("%.*s", (int)inpos, input);
       fflush(stdout);
     }
+    if (FD_ISSET(STDIN_FILENO, &fds)) {
+      char c;
+      if (read(STDIN_FILENO, &c, 1) <= 0)
+        continue;
+
+      if (c == '\n') {
+        input[inpos] = '\0';
+        if (inpos > 0) {
+          char out[MAX_MSG + 6];
+          snprintf(out, sizeof(out), "MSG %s\n", input);
+          if (write(sockfd, out, strlen(out)) < 0)
+            die("write");
+        }
+        inpos = 0;
+        printf("\n");
+        fflush(stdout);
+      } else if (c == 127 && inpos > 0) {
+        inpos--;
+        printf("\b \b");
+        fflush(stdout);
+      } else if (inpos < MAX_MSG) {
+        input[inpos++] = c;
+        putchar(c);
+        fflush(stdout);
+      }
+    }
   }
+
+  restore_terminal();
+  close(sockfd);
+  return 0;
 }

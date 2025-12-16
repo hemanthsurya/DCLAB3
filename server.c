@@ -1,14 +1,14 @@
 #define _POSIX_C_SOURCE 200809L
 #include <arpa/inet.h>
+#include <errno.h>
 #include <math.h>
 #include <netdb.h>
-#include <errno.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -17,11 +17,11 @@
 #define RBUF 4096
 
 typedef struct {
-    int fd;
-    int registered;
-    char nick[MAX_NICK + 1];
-    char buf[RBUF];
-    size_t bufpos;
+  int fd;
+  int registered;
+  char nick[MAX_NICK + 1];
+  char buf[RBUF];
+  size_t bufpos;
 } client_t;
 
 static client_t clients[MAX_CLIENTS];
@@ -62,6 +62,14 @@ static int setup_listener(const char *host, const char *port) {
     return -1;
   }
   return s;
+}
+
+static void send_to_client(int fd, const char *msg) {
+  ssize_t n = write(fd, msg, strlen(msg));
+  if (n < 0) {
+    perror("write");
+    fflush(stderr);
+  }
 }
 
 int main(int argc, char *argv[]) {
@@ -106,5 +114,33 @@ int main(int argc, char *argv[]) {
     }
 
     select(maxfd + 1, &fds, NULL, NULL, NULL);
+
+    if (FD_ISSET(listenfd, &fds)) {
+      struct sockaddr_storage ss;
+      socklen_t slen = sizeof(ss);
+      int cfd = accept(listenfd, (struct sockaddr *)&ss, &slen);
+
+      if (cfd >= 0) {
+        char addr[INET6_ADDRSTRLEN];
+        char port[6];
+
+        getnameinfo((struct sockaddr *)&ss, slen, addr, sizeof(addr), port,
+                    sizeof(port), NI_NUMERICHOST | NI_NUMERICSERV);
+
+        printf("Client connected from %s:%s\n", addr, port);
+        printf("Server protocol: HELLO 1\n");
+        fflush(stdout);
+
+        for (int i = 0; i < MAX_CLIENTS; i++) {
+          if (clients[i].fd == -1) {
+            clients[i].fd = cfd;
+            clients[i].bufpos = 0;
+            clients[i].registered = 0;
+            send_to_client(cfd, "Hello 1\n");
+            break;
+          }
+        }
+      }
+    }
   }
 }
