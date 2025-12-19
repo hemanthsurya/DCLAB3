@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <regex.h>
 
 #define MAX_CLIENTS FD_SETSIZE
 #define MAX_NICK 12
@@ -70,6 +71,33 @@ static void send_to_client(int fd, const char *msg) {
     perror("write");
     fflush(stderr);
   }
+}
+
+static void broadcast(const char *msg) {
+  for (int i = 0; i < MAX_CLIENTS; i++) {
+    if (clients[i].fd != -1 && clients[i].registered) {
+      send_to_client(clients[i].fd, msg);
+    }
+  }
+}
+
+static void remove_client(int i) {
+  close(clients[i].fd);
+  clients[i].fd = -1;
+  clients[i].registered = 0;
+  clients[i].bufpos = 0;
+  clients[i].nick[0] = '\0';
+}
+
+static int valid_nick(const char *nick) {
+  regex_t re;
+  if (!nick || strlen(nick) == 0 || strlen(nick) > MAX_NICK)
+    return 0;
+
+  regcomp(&re, "^[A-Za-z0-9_]{1,12}$", REG_EXTENDED | REG_NOSUB);
+  int ok = (regexec(&re, nick, 0, NULL, 0) == 0);
+  regfree(&re);
+  return ok;
 }
 
 int main(int argc, char *argv[]) {
@@ -141,6 +169,58 @@ int main(int argc, char *argv[]) {
           }
         }
       }
+    }
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+      if (clients[i].fd == -1)
+        continue;
+
+      int fd = clients[i].fd;
+      if (!FD_ISSET(fd, &fds))
+        continue;
+
+      ssize_t r = read(fd, clients[i].buf + clients[i].bufpos,
+                       RBUF - clients[i].bufpos - 1);
+
+      if (r <= 0) {
+        remove_client(i);
+        continue;
+      }
+
+      clients[i].bufpos += r;
+      clients[i].buf[clients[i].bufpos] = '\0';
+
+      char *start = clients[i].buf;
+      char *end = start + clients[i].bufpos;
+
+      while (1) {
+        char *nl = strchr(start, '\n');
+        if (!nl)
+          break;
+
+        *nl = '\0';
+
+        if (strncmp(start, "NICK ", 5) == 0) {
+          char *nick = start + 5;
+          if (valid_nick(nick)) {
+            strcpy(clients[i].nick, nick);
+            clients[i].registered = 1;
+            send_to_client(fd, "OK\n");
+            printf("Name is allowed\n");
+            fflush(stdout);
+          } else {
+            send_to_client(fd, "ERR invalid nick\n");
+          }
+        } else if (strncmp(start, "MSG ", 4) == 0 && clients[i].registered) {
+          char out[512];
+          snprintf(out, sizeof(out), "MSG %s %s\n", clients[i].nick, start + 4);
+          broadcast(out);
+        }
+
+        start = nl + 1;
+      }
+
+      memmove(clients[i].buf, start, end - start);
+      clients[i].bufpos = end - start;
     }
   }
 }
