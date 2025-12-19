@@ -34,6 +34,7 @@ static void setup_terminal(void) {
 }
 
 static void die(const char *msg) {
+  fprintf(stderr, "ERROR: ");
   perror(msg);
   fflush(stderr);
   restore_terminal();
@@ -93,7 +94,7 @@ int main(int argc, char *argv[]) {
   char *hp = strdup(argv[1]);
   char *colon = strrchr(hp, ':');
   if (!colon || !validate_nick(argv[2])) {
-    fprintf(stderr, "Invalid arguments\n");
+    fprintf(stderr, "ERROR: Invalid arguments\n");
     fflush(stderr);
     free(hp);
     return EXIT_FAILURE;
@@ -135,7 +136,10 @@ int main(int argc, char *argv[]) {
     die("read");
   buf[n] = '\0';
 
-  if (strncmp(buf, "OK", 2) != 0) {
+  char sockbuf[READBUF];
+  size_t socklen = 0;
+  char *nl = strchr(buf, '\n');
+  if (!nl || strncmp(buf, "OK", 2) != 0) {
     fprintf(stderr, "%s", buf);
     fflush(stderr);
     return EXIT_FAILURE;
@@ -144,10 +148,14 @@ int main(int argc, char *argv[]) {
   printf("Name accepted!\n");
   fflush(stdout);
 
-  setup_terminal();
+  nl++;
+  size_t remaining = n - (nl - buf);
+  if (remaining > 0) {
+    memcpy(sockbuf, nl, remaining);
+    socklen = remaining;
+  }
 
-  char sockbuf[READBUF];
-  size_t socklen = 0;
+  setup_terminal();
 
   char input[MAX_MSG + 1];
   size_t inpos = 0;
@@ -166,8 +174,24 @@ int main(int argc, char *argv[]) {
     if (FD_ISSET(sockfd, &fds)) {
       ssize_t r =
           read(sockfd, sockbuf + socklen, sizeof(sockbuf) - socklen - 1);
-      if (r <= 0)
+      if (r <= 0) {
+        if (socklen > 0) {
+          sockbuf[socklen] = '\0';
+
+          if (strncmp(sockbuf, "MSG ", 4) == 0) {
+            char *p = sockbuf + 4;
+            char *sp = strchr(p, ' ');
+            if (sp) {
+              *sp = '\0';
+              if (strcmp(p, mynick) != 0) {
+                printf("%s: %s\n", p, sp + 1);
+                fflush(stdout);
+              }
+            }
+          }
+        }
         break;
+      }
 
       socklen += r;
       sockbuf[socklen] = '\0';
@@ -224,6 +248,22 @@ int main(int argc, char *argv[]) {
         input[inpos++] = c;
         putchar(c);
         fflush(stdout);
+      }
+    }
+  }
+
+  if (socklen > 0) {
+    sockbuf[socklen] = '\0';
+
+    if (strncmp(sockbuf, "MSG ", 4) == 0) {
+      char *p = sockbuf + 4;
+      char *sp = strchr(p, ' ');
+      if (sp) {
+        *sp = '\0';
+        if (strcmp(p, mynick) != 0) {
+          printf("%s: %s\n", p, sp + 1);
+          fflush(stdout);
+        }
       }
     }
   }
